@@ -15,23 +15,58 @@ import plotly.express as px
 import plotly.graph_objects as go
 import os
 import sys
+import warnings
+
+# Suppress warnings for better user experience
+warnings.filterwarnings('ignore', category=UserWarning)
+warnings.filterwarnings('ignore', category=FutureWarning)
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from config.feature_config import NORMAL_RANGES, FEATURES
-from src.utils.preprocessing import process_user_input
-from src.visualization import (
-    create_anemia_distribution_pie, create_gender_distribution_plots,
-    create_age_distribution_plots, create_hematological_parameter_plots,
-    create_correlation_heatmap, create_prediction_gauge,
-    create_feature_comparison_radar
-)
+
+# Import configuration and utilities with error handling
+try:
+    from config.feature_config import NORMAL_RANGES, FEATURES
+except ImportError as e:
+    st.error(f"Could not import feature configuration: {e}")
+    st.stop()
+
+try:
+    from src.utils.preprocessing import process_user_input
+except ImportError as e:
+    st.error(f"Could not import preprocessing utilities: {e}")
+    st.stop()
+
+try:
+    from src.visualization import (
+        create_anemia_distribution_pie, create_gender_distribution_plots,
+        create_age_distribution_plots, create_hematological_parameter_plots,
+        create_correlation_heatmap, create_prediction_gauge,
+        create_feature_comparison_radar
+    )
+except ImportError as e:
+    st.warning(f"Some visualization functions may not be available: {e}")
+    # Define dummy functions to prevent app crashes
+    def create_anemia_distribution_pie(df):
+        return None
+    def create_gender_distribution_plots(df):
+        return {'gender_pie': None, 'gender_diagnosis_bar': None}
+    def create_age_distribution_plots(df):
+        return {'age_histogram': None, 'age_anemia_bar': None}
+    def create_hematological_parameter_plots(df, param):
+        return {'histogram': None, 'boxplot': None}
+    def create_correlation_heatmap(df):
+        return None
+    def create_prediction_gauge(probability, prediction):
+        return None
+    def create_feature_comparison_radar(user_input, normal_ranges):
+        return None
 
 # Load the model
 @st.cache_resource
 def load_model(model_path="models/anemia_prediction_model.pkl"):
     """
-    Load the anemia prediction model
+    Load the anemia prediction model with proper error handling
     
     Args:
         model_path: Path to the model file
@@ -40,10 +75,28 @@ def load_model(model_path="models/anemia_prediction_model.pkl"):
         model: Loaded model
     """
     try:
-        model = joblib.load(model_path)
-        return model
+        # Suppress sklearn version warnings during model loading
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            model = joblib.load(model_path)
+        
+        # Test if the model can make predictions
+        try:
+            # Create a dummy input to test the model
+            dummy_input = pd.DataFrame([[25, 12.0, 4.5, 40.0, 85.0, 29.0, 34.0, 1]], 
+                                     columns=['Age', 'Hb', 'RBC', 'PCV', 'MCV', 'MCH', 'MCHC', 'Gender_Encoded'])
+            _ = model.predict(dummy_input)
+            
+            return model
+        except Exception as e:
+            st.warning(f"Model loaded but may have compatibility issues: {e}")
+            return model
+            
     except FileNotFoundError:
         st.error("Model file not found. Please make sure the model is trained and saved properly.")
+        return None
+    except Exception as e:
+        st.error(f"Error loading model: {e}")
         return None
 
 # Load the dataset for visualization and statistics
@@ -101,17 +154,21 @@ def make_prediction(user_input, model):
                 if max_val is not None and value > max_val:
                     st.warning(f"{feature} value ({value}) is above typical maximum ({max_val})")
         
-        # Get prediction
-        prediction = model.predict(input_df)[0]
+        # Get prediction with warning suppression
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            prediction = model.predict(input_df)[0]
         
         # Get probability if available
         probability = None
         try:
-            if hasattr(model, 'predict_proba'):
-                probability = model.predict_proba(input_df)[0][1]
-            elif hasattr(model, 'named_steps') and 'model' in model.named_steps:
-                if hasattr(model.named_steps['model'], 'predict_proba'):
-                    probability = model.named_steps['model'].predict_proba(input_df)[0][1]
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                if hasattr(model, 'predict_proba'):
+                    probability = model.predict_proba(input_df)[0][1]
+                elif hasattr(model, 'named_steps') and 'model' in model.named_steps:
+                    if hasattr(model.named_steps['model'], 'predict_proba'):
+                        probability = model.named_steps['model'].predict_proba(input_df)[0][1]
         except Exception as e:
             return prediction, None, f"Could not calculate probability: {str(e)}"
         
@@ -150,8 +207,14 @@ def display_prediction_result(prediction, probability):
     with result_col2:
         # Display result with gauge chart
         if probability is not None:
-            fig = create_prediction_gauge(probability, prediction)
-            st.plotly_chart(fig)
+            try:
+                fig = create_prediction_gauge(probability, prediction)
+                if fig:
+                    st.plotly_chart(fig)
+            except Exception as e:
+                st.warning(f"Could not create prediction gauge: {e}")
+                # Fallback to simple text display
+                st.metric("Confidence Level", f"{probability:.2%}")
 
 def reset_input_values():
     """
@@ -355,7 +418,7 @@ def display_prediction_interface():
 
 def display_exploratory_analysis(df):
     """
-    Display exploratory analysis of the dataset
+    Display exploratory analysis of the dataset with error handling
     
     Args:
         df: DataFrame with anemia data
@@ -377,8 +440,12 @@ def display_exploratory_analysis(df):
     
     with overview_col2:
         # Create diagnosis pie chart
-        fig_diagnosis = create_anemia_distribution_pie(df)
-        st.plotly_chart(fig_diagnosis)
+        try:
+            fig_diagnosis = create_anemia_distribution_pie(df)
+            if fig_diagnosis:
+                st.plotly_chart(fig_diagnosis)
+        except Exception as e:
+            st.warning(f"Could not create diagnosis pie chart: {e}")
     
     # Create copy for visualization
     df_viz = df.copy()
@@ -390,22 +457,38 @@ def display_exploratory_analysis(df):
     gender_col1, gender_col2 = st.columns(2)
     
     with gender_col1:
-        gender_figs = create_gender_distribution_plots(df)
-        st.plotly_chart(gender_figs['gender_pie'])
+        try:
+            gender_figs = create_gender_distribution_plots(df)
+            if gender_figs and gender_figs.get('gender_pie'):
+                st.plotly_chart(gender_figs['gender_pie'])
+        except Exception as e:
+            st.warning(f"Could not create gender pie chart: {e}")
     
     with gender_col2:
-        st.plotly_chart(gender_figs['gender_diagnosis_bar'])
+        try:
+            if 'gender_figs' in locals() and gender_figs.get('gender_diagnosis_bar'):
+                st.plotly_chart(gender_figs['gender_diagnosis_bar'])
+        except Exception as e:
+            st.warning(f"Could not create gender diagnosis chart: {e}")
     
     # Age distribution
     st.write("### Age Distribution")
     age_col1, age_col2 = st.columns(2)
     
     with age_col1:
-        age_figs = create_age_distribution_plots(df)
-        st.plotly_chart(age_figs['age_histogram'])
+        try:
+            age_figs = create_age_distribution_plots(df)
+            if age_figs and age_figs.get('age_histogram'):
+                st.plotly_chart(age_figs['age_histogram'])
+        except Exception as e:
+            st.warning(f"Could not create age histogram: {e}")
     
     with age_col2:
-        st.plotly_chart(age_figs['age_anemia_bar'])
+        try:
+            if 'age_figs' in locals() and age_figs.get('age_anemia_bar'):
+                st.plotly_chart(age_figs['age_anemia_bar'])
+        except Exception as e:
+            st.warning(f"Could not create age anemia chart: {e}")
     
     # Hematological parameters
     st.write("### Hematological Parameters")
@@ -417,11 +500,19 @@ def display_exploratory_analysis(df):
     param_col1, param_col2 = st.columns(2)
     
     with param_col1:
-        param_figs = create_hematological_parameter_plots(df, selected_param)
-        st.plotly_chart(param_figs['histogram'])
+        try:
+            param_figs = create_hematological_parameter_plots(df, selected_param)
+            if param_figs and param_figs.get('histogram'):
+                st.plotly_chart(param_figs['histogram'])
+        except Exception as e:
+            st.warning(f"Could not create parameter histogram: {e}")
     
     with param_col2:
-        st.plotly_chart(param_figs['boxplot'])
+        try:
+            if 'param_figs' in locals() and param_figs.get('boxplot'):
+                st.plotly_chart(param_figs['boxplot'])
+        except Exception as e:
+            st.warning(f"Could not create parameter boxplot: {e}")
     
     # Display normal ranges and statistics
     st.write(f"### {selected_param} Analysis")
@@ -441,14 +532,21 @@ def display_exploratory_analysis(df):
     
     # Statistics by gender and diagnosis
     st.write(f"**{selected_param} Statistics by Gender and Diagnosis:**")
-    stats_df = df_viz.groupby(['Gender', 'Diagnosis'])[selected_param].agg(['mean', 'std', 'min', 'max']).round(2)
-    st.dataframe(stats_df)
+    try:
+        stats_df = df_viz.groupby(['Gender', 'Diagnosis'])[selected_param].agg(['mean', 'std', 'min', 'max']).round(2)
+        st.dataframe(stats_df)
+    except Exception as e:
+        st.warning(f"Could not create statistics table: {e}")
     
     # Correlation heatmap
     st.write("### Correlation Between Parameters")
     
-    corr_fig = create_correlation_heatmap(df)
-    st.plotly_chart(corr_fig)
+    try:
+        corr_fig = create_correlation_heatmap(df)
+        if corr_fig:
+            st.plotly_chart(corr_fig)
+    except Exception as e:
+        st.warning(f"Could not create correlation heatmap: {e}")
     
     # Research findings from the paper
     st.write("### Research Findings")
@@ -841,8 +939,15 @@ def main():
                         
                         # Add feature comparison radar chart
                     st.subheader("Parameter Comparison with Normal Ranges")
-                    radar_fig = create_feature_comparison_radar(user_input, NORMAL_RANGES)
-                    st.plotly_chart(radar_fig)
+                    try:
+                        radar_fig = create_feature_comparison_radar(user_input, NORMAL_RANGES)
+                        if radar_fig:
+                            st.plotly_chart(radar_fig)
+                    except Exception as e:
+                        st.warning(f"Could not create parameter comparison chart: {e}")
+                        
+                    if error:
+                        st.error(f"Prediction Error: {error}")
     
     elif app_mode == "Exploratory Analysis":
         if df is None:
