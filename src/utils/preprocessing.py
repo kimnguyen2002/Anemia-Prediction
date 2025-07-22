@@ -10,13 +10,29 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 import sys
 import os
+import warnings
+
+# Suppress scikit-learn version warnings
+warnings.filterwarnings('ignore', category=UserWarning, module='sklearn')
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from config.feature_config import encode_gender
 
-# Explicitly expose SMOTE class from imblearn
-from imblearn.over_sampling import SMOTE
+# Try to import SMOTE with fallback handling
+try:
+    from imblearn.over_sampling import SMOTE
+    SMOTE_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Could not import SMOTE: {e}")
+    SMOTE_AVAILABLE = False
+    # Create a dummy SMOTE class for compatibility
+    class SMOTE:
+        def __init__(self, *args, **kwargs):
+            raise ImportError("SMOTE is not available. Please install imbalanced-learn.")
+        
+        def fit_resample(self, X, y):
+            raise ImportError("SMOTE is not available. Please install imbalanced-learn.")
 
 def prepare_data_for_training(df, target_column='Decision_Class'):
     """
@@ -54,15 +70,24 @@ def apply_smote(X_train, y_train, random_state=42):
         X_resampled: Resampled features
         y_resampled: Resampled target
     """
+    if not SMOTE_AVAILABLE:
+        print("Warning: SMOTE not available, returning original data without resampling")
+        return X_train, y_train
+    
     print("Applying SMOTE to handle class imbalance...")
     print(f"Original class distribution: {pd.Series(y_train).value_counts(normalize=True).round(3) * 100}")
     
-    smote = SMOTE(random_state=random_state)
-    X_resampled, y_resampled = smote.fit_resample(X_train, y_train)
-    
-    print(f"Resampled class distribution: {pd.Series(y_resampled).value_counts(normalize=True).round(3) * 100}")
-    
-    return X_resampled, y_resampled
+    try:
+        smote = SMOTE(random_state=random_state)
+        X_resampled, y_resampled = smote.fit_resample(X_train, y_train)
+        
+        print(f"Resampled class distribution: {pd.Series(y_resampled).value_counts(normalize=True).round(3) * 100}")
+        
+        return X_resampled, y_resampled
+    except Exception as e:
+        print(f"Error applying SMOTE: {e}")
+        print("Returning original data without resampling")
+        return X_train, y_train
 
 def scale_features(X_train, X_test=None, scaler=None):
     """
